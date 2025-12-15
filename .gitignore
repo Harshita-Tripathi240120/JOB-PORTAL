@@ -1,0 +1,12 @@
+# VS Code
+.vscode/
+
+# Java build
+java-backend/target/
+
+# Node
+frontend/node_modules/
+
+# Python
+.venv/
+__pycache__/
