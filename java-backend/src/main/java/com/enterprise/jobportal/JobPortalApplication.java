@@ -20,29 +20,27 @@ public class JobPortalApplication {
         SpringApplication.run(JobPortalApplication.class, args);
     }
 
-    // 1. SECURITY: Allow React
+    // 1. SECURITY CONFIGURATION (CORS)
+    // Allows your React Frontend (port 5173) to access this Java Backend (port 8080)
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http.cors(cors -> cors.configure(http))
-            .csrf(csrf -> csrf.disable())
+            .csrf(csrf -> csrf.disable()) // Disabled for development simplicity
             .authorizeHttpRequests(auth -> auth.anyRequest().permitAll());
         return http.build();
     }
 
-    // 2. DATABASE INIT: Pre-load Jobs and a Test User
+    // 2. DATABASE SEEDING
+    // Pre-loads sample data so the app isn't empty on first run
     @Bean
     CommandLineRunner initDatabase(JobRepository jobRepo, UserRepository userRepo) {
         return args -> {
-            // Seed Jobs if empty
             if (jobRepo.count() == 0) {
-                jobRepo.save(new Job("Senior Java Dev", "TechCorp", "$140k", "New York", "Full-time", List.of("Java", "Spring", "Microservices")));
-                jobRepo.save(new Job("Python ML Engineer", "DataAI", "$130k", "Remote", "Contract", List.of("Python", "TensorFlow", "FastAPI")));
-            }
-            
-            // Seed Admin/Test User if empty
-            if (userRepo.findByEmail("admin@test.com").isEmpty()) {
-                userRepo.save(new User("admin@test.com", "password", "Admin", "User", "admin"));
-                System.out.println("--- Database Initialized with Jobs & Admin User ---");
+                // Pre-create some Unstop-style opportunities
+                jobRepo.save(new Job("CodeWars 2025", "Microsoft", "$15,000 Prize", "Online", "Hackathon", List.of("C++", "Algorithms")));
+                jobRepo.save(new Job("Product Design Challenge", "Uber", "Internship Offer", "Hybrid", "Case Challenge", List.of("Figma", "Product Mgmt")));
+                jobRepo.save(new Job("Backend Engineer", "Amazon", "$45k/yr", "Bangalore", "Job", List.of("Java", "AWS", "DynamoDB")));
+                System.out.println("--- Database Initialized with Sample Opportunities ---");
             }
         };
     }
@@ -51,46 +49,17 @@ public class JobPortalApplication {
 // --- ENTITIES (Database Tables) ---
 
 @Entity
-class Job {
-    @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
-    private String title;
-    private String company;
-    private String salary;
-    private String location;
-    private String type;
-    @ElementCollection
-    private List<String> skills;
-
-    public Job() {}
-    public Job(String title, String company, String salary, String location, String type, List<String> skills) {
-        this.title = title;
-        this.company = company;
-        this.salary = salary;
-        this.location = location;
-        this.type = type;
-        this.skills = skills;
-    }
-    // Getters
-    public Long getId() { return id; }
-    public String getTitle() { return title; }
-    public String getCompany() { return company; }
-    public String getSalary() { return salary; }
-    public String getLocation() { return location; }
-    public String getType() { return type; }
-    public List<String> getSkills() { return skills; }
-}
-
-@Entity
 @Table(name = "users")
 class User {
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+    
+    @Column(unique = true)
     private String email;
-    private String password; // In production, hash this!
+    private String password; // In production, use BCrypt hashing!
     private String firstName;
     private String lastName;
-    private String role; // "candidate", "recruiter"
+    private String role; // "participant" or "organizer"
 
     public User() {}
     public User(String email, String password, String firstName, String lastName, String role) {
@@ -101,49 +70,84 @@ class User {
         this.role = role;
     }
 
-    // Getters
+    // Getters for JSON response
     public Long getId() { return id; }
     public String getEmail() { return email; }
-    public String getPassword() { return password; }
     public String getFirstName() { return firstName; }
     public String getLastName() { return lastName; }
     public String getRole() { return role; }
+    public String getPassword() { return password; }
 }
 
-// --- REPOSITORIES ---
+@Entity
+@Table(name = "jobs")
+class Job {
+    @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+    private String title;
+    private String company;
+    private String salary; // Used for "Prize/CTC" in UI
+    private String location; // Used for "Mode" (Online/Offline)
+    private String type; // "Hackathon", "Job", "Internship"
+    
+    @ElementCollection
+    private List<String> skills; // Tags
 
-interface JobRepository extends JpaRepository<Job, Long> {}
+    public Job() {}
+    public Job(String title, String company, String salary, String location, String type, List<String> skills) {
+        this.title = title;
+        this.company = company;
+        this.salary = salary;
+        this.location = location;
+        this.type = type;
+        this.skills = skills;
+    }
+
+    // Getters
+    public Long getId() { return id; }
+    public String getTitle() { return title; }
+    public String getCompany() { return company; }
+    public String getSalary() { return salary; }
+    public String getLocation() { return location; }
+    public String getType() { return type; }
+    public List<String> getSkills() { return skills; }
+}
+
+// --- REPOSITORIES (Data Access Layer) ---
 
 interface UserRepository extends JpaRepository<User, Long> {
     Optional<User> findByEmail(String email);
 }
 
-// --- CONTROLLERS ---
+interface JobRepository extends JpaRepository<Job, Long> {}
+
+// --- CONTROLLERS (API Endpoints) ---
 
 @RestController
 @RequestMapping("/api")
-@CrossOrigin(origins = "http://localhost:5173")
+@CrossOrigin(origins = "http://localhost:5173") // Explicitly allow Frontend origin
 class MainController {
 
-    @Autowired private JobRepository jobRepository;
     @Autowired private UserRepository userRepository;
+    @Autowired private JobRepository jobRepository;
 
-    // --- AUTH endpoints ---
+    // --- AUTHENTICATION ---
 
     @PostMapping("/auth/register")
     public ResponseEntity<?> register(@RequestBody Map<String, String> body) {
         if (userRepository.findByEmail(body.get("email")).isPresent()) {
             return ResponseEntity.badRequest().body(Map.of("error", "Email already exists"));
         }
+        
         User newUser = new User(
             body.get("email"),
             body.get("password"),
             body.get("firstName"),
             body.get("lastName"),
-            body.get("role")
+            body.getOrDefault("role", "participant")
         );
         userRepository.save(newUser);
-        return ResponseEntity.ok(Map.of("message", "User registered successfully"));
+        return ResponseEntity.ok(Map.of("message", "Registration successful"));
     }
 
     @PostMapping("/auth/login")
@@ -151,39 +155,38 @@ class MainController {
         String email = creds.get("email");
         String password = creds.get("password");
 
-        // 1. Try Database Login (Priority)
+        // 1. Database Auth
         if (email != null && password != null) {
             Optional<User> userOpt = userRepository.findByEmail(email);
-            if (userOpt.isPresent()) {
+            if (userOpt.isPresent() && userOpt.get().getPassword().equals(password)) {
                 User user = userOpt.get();
-                if (user.getPassword().equals(password)) {
-                    Map<String, Object> response = new HashMap<>();
-                    response.put("token", "jwt-token-" + user.getId());
-                    response.put("name", user.getFirstName() + " " + user.getLastName());
-                    response.put("role", user.getRole());
-                    return ResponseEntity.ok(response);
-                }
+                return ResponseEntity.ok(Map.of(
+                    "token", "jwt-fake-token-" + user.getId(),
+                    "name", user.getFirstName() + " " + user.getLastName(),
+                    "role", user.getRole(),
+                    "firstName", user.getFirstName()
+                ));
             }
             return ResponseEntity.status(401).body(Map.of("error", "Invalid credentials"));
         }
 
-        // 2. Demo Mode (Fallback for Quick Buttons)
-        // If no email/pass provided, allow demo login based on role
-        String role = creds.getOrDefault("role", "candidate");
-        Map<String, Object> response = new HashMap<>();
-        response.put("token", "demo-token");
-        response.put("name", "Demo " + role.toUpperCase());
-        response.put("role", role);
-        return ResponseEntity.ok(response);
+        // 2. Demo/Quick Login Fallback (For button clicks without email)
+        String role = creds.getOrDefault("role", "participant");
+        return ResponseEntity.ok(Map.of(
+            "token", "demo-token",
+            "name", role.equals("organizer") ? "TechCorp Admin" : "Demo Student",
+            "role", role,
+            "firstName", "Demo"
+        ));
     }
 
-    // --- JOB endpoints ---
+    // --- OPPORTUNITIES / JOBS ---
 
     @GetMapping("/jobs")
-    public List<Job> getAllJobs() {
+    public List<Job> getJobs() {
         return jobRepository.findAll();
     }
-    
+
     @PostMapping("/jobs")
     public Job postJob(@RequestBody Job newJob) {
         return jobRepository.save(newJob);
